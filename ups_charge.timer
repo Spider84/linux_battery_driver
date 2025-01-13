@@ -1,0 +1,10 @@
+[Unit]
+Description=Update NUT UPS Charge level to battery kernel module
+Requires=ups_charge.service
+
+[Timer]
+Unit=ups_charge.service
+OnCalendar=*-*-* *:*:00
+
+[Install]
+WantedBy=timers.target
