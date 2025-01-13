@@ -1,0 +1,14 @@
+[Unit]
+Description=Update NUT UPS Charge level to battery kernel module
+Wants=ups_charge.timer
+
+[Service]
+Type=oneshot
+ExecStart=sh -c 'echo "capacity0 = $(upsc apc1500@localhost battery.charge 2>/dev/null)" | sudo tee /dev/anyon_e_battery'
+ExecStart=sh -c 'echo "temp0 = $(upsc apc1500@localhost battery.temperature 2>/dev/null)" | sudo tee /dev/anyon_e_battery'
+ExecStart=sh -c 'echo "voltage0 = $(upsc apc1500@localhost battery.voltage 2>/dev/null)" | sudo tee /dev/anyon_e_battery'
+User=nut
+Group=nut
+
+[Install]
+WantedBy=multi-user.target
