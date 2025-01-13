@@ -21,6 +21,7 @@
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/power_supply.h>
+#include <linux/slab.h>
 
 #include <asm/uaccess.h>
 
@@ -39,12 +40,22 @@ static struct battery_status {
     int capacity_level;
     int capacity;
     int time_left;
+    short temp;
+    unsigned short voltage;
+    char *manufacturer;
+    char *model;
+    char *serial;
 } anyon_e_battery_statuses[1] = {
     {
         .status = POWER_SUPPLY_STATUS_FULL,
         .capacity_level = POWER_SUPPLY_CAPACITY_LEVEL_FULL,
         .capacity = 100,
         .time_left = 3600,
+        .temp = 250,
+        .voltage = 2400,
+        .manufacturer = NULL,
+        .model = NULL,
+        .serial = NULL,
     },
 };
 
@@ -148,21 +159,121 @@ handle_control_line(const char *line, int *ac_status, struct battery_status *bat
 
     value_p = skip_spaces(value_p + 1);
 
-    status = kstrtol(value_p, 10, &value);
-
-    if(status) {
-        return status;
-    }
-
     if(prefixed(line, "capacity")) {
         int battery_num = line[sizeof("capacity") - 1] - '0';
         if(battery_num != 0 && battery_num != 1) {
             return -ERANGE;
         }
+
+        status = kstrtol(value_p, 10, &value);
+
+        if(status) {
+            return status;
+        }
         batteries[battery_num].capacity = value;
-    } else if(prefixed(line, "charging")) {
+    }
+    else
+    if(prefixed(line, "charging")) {
+        status = kstrtol(value_p, 10, &value);
+
+        if(status) {
+            return status;
+        }
+
         *ac_status = value;
-    } else {
+    }
+    else
+    if(prefixed(line, "manufacturer")) {
+        int battery_num = line[sizeof("manufacturer") - 1] - '0';
+        if(battery_num != 0 && battery_num != 1) {
+            return -ERANGE;
+        }
+        kfree(batteries[battery_num].manufacturer);
+        batteries[battery_num].manufacturer = kstrdup(value_p, GFP_KERNEL);
+	    if (!batteries[battery_num].manufacturer)
+	        return -ENOMEM;
+    }
+    else
+    if(prefixed(line, "model")) {
+        int battery_num = line[sizeof("model") - 1] - '0';
+        if(battery_num != 0 && battery_num != 1) {
+            return -ERANGE;
+        }
+        kfree(batteries[battery_num].model);
+        batteries[battery_num].model = kstrdup(value_p, GFP_KERNEL);
+	    if (!batteries[battery_num].model)
+	        return -ENOMEM;
+    }
+    else
+    if(prefixed(line, "serial")) {
+        int battery_num = line[sizeof("serial") - 1] - '0';
+        if(battery_num != 0 && battery_num != 1) {
+            return -ERANGE;
+        }
+        kfree(batteries[battery_num].serial);
+        batteries[battery_num].serial = kstrdup(value_p, GFP_KERNEL);
+	    if (!batteries[battery_num].serial)
+	        return -ENOMEM;
+    }
+    else
+    if(prefixed(line, "temp")) {
+        char *p;
+        int battery_num = line[sizeof("temp") - 1] - '0';
+        if(battery_num != 0 && battery_num != 1) {
+            return -ERANGE;
+        }
+
+        if ((p = strchrnul(value_p, '.')))
+        {
+            *p = 0;
+        }
+
+        if ((status = kstrtol(value_p, 10, &value)))
+            return status;
+
+        value *= 10;
+
+        if (p)
+        {
+            long f;
+            if ((status = kstrtol(p+1, 10, &f)) || f>10)
+                return status;
+
+            value+=f;
+        }
+
+        batteries[battery_num].temp = value;
+    }
+    else
+    if(prefixed(line, "voltage")) {
+        char *p;
+        int battery_num = line[sizeof("voltage") - 1] - '0';
+        if(battery_num != 0 && battery_num != 1) {
+            return -ERANGE;
+        }
+
+        if ((p = strchrnul(value_p, '.')))
+        {
+            *p = 0;
+        }
+
+        if ((status = kstrtol(value_p, 10, &value)))
+            return status;
+
+        value *= 10;
+
+        if (p)
+        {
+            long f;
+            if ((status = kstrtol(p+1, 10, &f)) || f>10)
+                return status;
+
+            value+=f;
+        }
+
+        batteries[battery_num].voltage = value;
+    }
+    else {
         return -EINVAL;
     }
 
@@ -266,7 +377,13 @@ anyon_e_battery_generic_get_property(struct power_supply *psy,
 {
     switch (psp) {
         case POWER_SUPPLY_PROP_MANUFACTURER:
-            val->strval = "Linux";
+            val->strval = status->manufacturer;
+            break;
+        case POWER_SUPPLY_PROP_MODEL_NAME:
+            val->strval = status->model;
+            break;
+        case POWER_SUPPLY_PROP_SERIAL_NUMBER:
+            val->strval = status->serial;
             break;
         case POWER_SUPPLY_PROP_STATUS:
             val->intval = status->status;
@@ -281,7 +398,7 @@ anyon_e_battery_generic_get_property(struct power_supply *psy,
             val->intval = 1;
             break;
         case POWER_SUPPLY_PROP_TECHNOLOGY:
-            val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
+            val->intval = POWER_SUPPLY_TECHNOLOGY_UNKNOWN;
             break;
         case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
             val->intval = status->capacity_level;
@@ -299,10 +416,10 @@ anyon_e_battery_generic_get_property(struct power_supply *psy,
             val->intval = status->time_left;
             break;
         case POWER_SUPPLY_PROP_TEMP:
-            val->intval = 26;
+            val->intval = status->temp;
             break;
         case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-            val->intval = 3300;
+            val->intval = status->voltage;
             break;
         default:
             pr_info("%s: some properties deliberately report errors.\n",
@@ -317,17 +434,7 @@ anyon_e_battery_get_property1(struct power_supply *psy,
         enum power_supply_property psp,
         union power_supply_propval *val)
 {
-    switch (psp) {
-        case POWER_SUPPLY_PROP_MODEL_NAME:
-            val->strval = "anyon_e battery 1";
-            break;
-        case POWER_SUPPLY_PROP_SERIAL_NUMBER:
-            val->strval = "00000001";
-            break;
-        default:
-            return anyon_e_battery_generic_get_property(psy, psp, val, &anyon_e_battery_statuses[0]);
-    }
-    return 0;
+    return anyon_e_battery_generic_get_property(psy, psp, val, &anyon_e_battery_statuses[0]);
 }
 
 static int
@@ -336,10 +443,10 @@ anyon_e_ac_get_property(struct power_supply *psy,
         union power_supply_propval *val)
 {
     switch (psp) {
-    case POWER_SUPPLY_PROP_ONLINE:
+        case POWER_SUPPLY_PROP_ONLINE:
             val->intval = ac_status;
             break;
-    default:
+        default:
             return -EINVAL;
     }
     return 0;
@@ -364,6 +471,12 @@ anyon_e_battery_init(void)
             goto error;
         }
     }
+
+    anyon_e_battery_statuses[0].model = kstrdup("Battery", GFP_KERNEL);
+    anyon_e_battery_statuses[0].manufacturer = kstrdup("Linux", GFP_KERNEL);
+    anyon_e_battery_statuses[0].serial = kstrdup("00000001", GFP_KERNEL);
+    if (!anyon_e_battery_statuses[0].manufacturer || !anyon_e_battery_statuses[0].model || !anyon_e_battery_statuses[0].serial)
+        return -ENOMEM;
 
     printk(KERN_INFO "loaded anyon_e_battery module\n");
     return 0;
